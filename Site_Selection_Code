@@ -1,0 +1,131 @@
+import geopandas as gpd
+import osmnx as ox
+import matplotlib.pyplot as plt
+import pandas as pd
+import requests
+from shapely.geometry import LineString
+from geopy.distance import geodesic
+import matplotlib.lines as mlines
+from matplotlib.patches import Rectangle
+
+# Load the GPS data for random restaurants
+gps_data_restaurants = pd.read_csv('') #file path to GPS data
+gps_gdf_restaurants = gpd.GeoDataFrame(gps_data_restaurants, geometry=gpd.points_from_xy(gps_data_restaurants.longitude, gps_data_restaurants.latitude))
+gps_gdf_restaurants.set_crs(epsg=4326, inplace=True)
+
+
+# Define the way IDs for each division
+central_way_ids = [760967992, 760967991, 760967990, 760967989, 530206575, 760967985, 760967984, 760967983, 760967982, 530206570, 760967981, 530206572, 891908390, 891908388, 891908387, 891908385, 530206577, 891909353]
+rubaga_way_ids = [530206575, 760967989, 760967990, 760967991, 760967992, 530206574, 571393231, 760967993, 939408694, 891909369, 891909370, 530206569, 761863624, 761863625, 761863635, 761863636, 761616164, 761616166, 761604022, 761584187, 761584188, 761119471, 761119466, 761119465, 760968012, 761142804, 760968013, 760968019, 760968014, 760968021, 760968018, 761119496, 761119511, 761119510, 761119509, 761119486, 761119483, 760967988, 760967986, 760967987, 530206576]
+kawempe_way_ids = [891909345, 760967995, 891908384, 891909346, 530206571, 891909347, 891909348, 891909349, 891909350, 891909351, 891909352, 891908390, 891908388, 891908387, 891908385, 530206577, 891909353, 530206574, 571393231, 760967993, 939408694, 891909368, 891909367, 760967994, 530209381]
+makindye_way_ids = [761142825, 530206568, 260581173, 530206567, 760967980, 530206573, 760967981, 530206570, 760967982, 760967983, 760967984, 760967985, 530206576, 760967987, 760967986, 760967988, 761119483, 761119486, 761119509, 761119510, 761119511, 761119496, 760968018, 760968021, 760968014, 760968019, 760968013, 761142804, 761142828, 761142827]
+nakawa_way_ids = [530206573, 760967980, 260581181, 760967996, 760967997, 891909346, 530206571, 891909347, 891909348, 891909349, 891909350, 891909351, 891909352, 530206572]
+
+# Function to get geometries from way IDs
+def get_geometries_from_way_ids(way_ids):
+    base_url = "https://overpass-api.de/api/interpreter"
+    way_str = "".join(f"way({way_id});" for way_id in way_ids)
+    query = f"""
+    [out:json];
+    (
+      {way_str}
+    );
+    out geom;
+    """
+    response = requests.get(base_url, params={'data': query})
+    response.raise_for_status()
+    data = response.json()
+
+    ways = []
+    for element in data['elements']:
+        if element['type'] == 'way':
+            nodes = [(node['lon'], node['lat']) for node in element['geometry']]
+            ways.append(LineString(nodes))
+    return gpd.GeoSeries(ways)
+
+# Fetch and combine boundaries
+central_boundary = get_geometries_from_way_ids(central_way_ids).unary_union
+rubaga_boundary = get_geometries_from_way_ids(rubaga_way_ids).unary_union
+kawempe_boundary = get_geometries_from_way_ids(kawempe_way_ids).unary_union
+makindye_boundary = get_geometries_from_way_ids(makindye_way_ids).unary_union
+nakawa_boundary = get_geometries_from_way_ids(nakawa_way_ids).unary_union
+
+# Store boundaries in a dictionary for easier processing
+division_boundaries = {
+    'Central': central_boundary,
+    'Rubaga': rubaga_boundary,
+    'Kawempe': kawempe_boundary,
+    'Makindye': makindye_boundary,
+    'Nakawa': nakawa_boundary,
+}
+division_label_locations = {
+    'Central': (32.593, 0.325),    # Coordinates inside the Central division
+    'Rubaga': (32.55, 0.301),     # Coordinates inside Rubaga division
+    'Kawempe': (32.57, 0.36),    # Coordinates inside Kawempe division
+    'Makindye': (32.6, 0.28),   # Coordinates inside Makindye division
+    'Nakawa': (32.62, 0.35)      # Coordinates inside Nakawa division
+}
+
+# Plotting
+fig, ax = plt.subplots(figsize=(10, 10))
+
+# Set axis boundaries
+plt.xlim(32.5,32.7)  # Set y-axis
+plt.ylim(0.2,0.42)  # Set y-axis
+
+# Plot city boundaries in black
+place_name = "Kampala, Uganda"
+city_boundary = ox.geocode_to_gdf(place_name)
+city_boundary.plot(ax=ax, edgecolor='black', facecolor='none', linewidth=1)
+
+# Plot division boundaries in grey
+for division_name, boundary in division_boundaries.items():
+    gpd.GeoSeries([boundary]).plot(ax=ax, edgecolor='grey', facecolor='none', linewidth=1)
+
+# Label the divisions with their names
+for division_name, (x, y) in division_label_locations.items():
+    ax.text(x, y, division_name, fontsize=12, ha='center', color='black', fontweight='bold')
+
+# Plot the  locations
+ax.scatter(gps_gdf_restaurants.geometry.x, gps_gdf_restaurants.geometry.y, color='white', s=40, marker='o', zorder=10, edgecolor='black', linewidth=1)
+
+ax.plot([0, 1], [0, 1], color='black', linewidth=1, label='City Boundaries')
+ax.plot([0, 1], [0, 1], marker='o', color='black', markerfacecolor='white', markersize=6, linestyle='None', label='Restaurants')
+
+# Function to add a scale bar that scales with the plot
+def add_scale_bar(ax, location=(32.5, 0.22), length_in_km=5, linewidth=3, color="black"):
+    bar_x, bar_y = location  # Longitude, Latitude
+
+    # Calculate the longitude difference corresponding to the desired length in kilometers
+    start_point = (bar_y, bar_x)  # (latitude, longitude)
+    end_point = geodesic(kilometers=length_in_km).destination(start_point, 90)  # 90 degrees (East)
+    end_longitude = end_point.longitude
+
+    # Plot the scale bar as a simple line
+    ax.plot([bar_x, end_longitude], [bar_y, bar_y], color=color, lw=linewidth, solid_capstyle='butt')
+
+    # Add labels for 0 km and 5 km
+    ax.text(bar_x, bar_y - 0.005, '0 km', color=color, fontsize=12, ha='center')
+    ax.text(end_longitude, bar_y - 0.005, '5 km', color=color, fontsize=12, ha='center')
+
+# Call the scale bar function
+add_scale_bar(ax)
+
+# Remove x and y ticks (axis numbers)
+ax.set_xticks([])
+ax.set_yticks([])
+
+# Remove the axis borders
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+ax.spines['bottom'].set_visible(False)
+ax.spines['left'].set_visible(False)
+
+# Remove latitude and longitude labels
+ax.set_xlabel('')
+ax.set_ylabel('')
+
+plt.legend()
+plt.savefig('')  # Save the current figure as a PNG file
+plt.show()
+
